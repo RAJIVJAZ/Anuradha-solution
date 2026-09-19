@@ -1,0 +1,524 @@
+// Prisma mirror of db/schema.sql.
+//
+// The application uses `pg` directly (src/lib/db.ts) because the query surface
+// is small and the routes are serverless. This file exists so a team that
+// prefers Prisma can adopt it with `prisma db pull` already done, and so
+// Prisma Migrate can take over schema evolution.
+//
+// Kept deliberately faithful to the SQL. Verified with:
+//
+//   prisma migrate diff --from-schema-datamodel prisma/schema.prisma \
+//                       --to-schema-datasource prisma/schema.prisma --script
+//
+// against a database built from db/schema.sql, which reports no structural
+// difference — only a restatement of the `leads.reference` default, whose
+// expression Prisma cannot prove identical to its own rendering of it.
+//
+// Two things this file cannot express, so they come from db/schema.sql:
+//   * `lead_reference_seq`, the sequence behind `leads.reference`.
+//   * The CHECK constraints, the partial indexes (`... where status in (...)`)
+//     and the three reporting views.
+// Apply db/schema.sql first, then adopt Prisma Migrate for changes after that.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// ----------------------------------------------------------------- note
+///
+/// The SQL schema stores these fields as TEXT with CHECK constraints rather
+/// than as PostgreSQL enum types, because adding a value to an enum type needs
+/// a migration that takes a lock, and these lists change with the business.
+/// This mirror therefore types them as String so the two definitions agree.
+/// The permitted values are enforced in the database by the CHECK constraints
+/// in db/schema.sql, and in the application by the Zod schemas in
+/// src/lib/validation.ts.
+///
+///   interest          business-growth-strategy | project-funding-dpr |
+///                     factory-setup-operations | branding-marketing |
+///                     technology-automation | subsidies-compliance | not-sure
+///   revenue_band      pre-revenue | under-1-cr | 1-5-cr | 5-25-cr |
+///                     25-100-cr | above-100-cr
+///   timeline          immediate | 1-3-months | 3-6-months | exploring
+///   assigned_desk     partner-desk | engagement-manager | nurture-sequence
+///   lead stage        marketing-qualified | qualifying | discovery-scheduled |
+///                     proposal-issued | won | lost | disqualified
+///   user role         owner | partner | consultant | analyst | client
+///   client access     owner | editor | viewer
+///   engagement_model  project | retainer | success-fee | hybrid
+///   project health    on-track | at-risk | blocked
+///   milestone status  upcoming | active | done | slipped
+///   task owner_side   firm | client
+///   task status       open | in-progress | blocked | done | cancelled
+///   document category DPR | Financials | Statutory | Layout |
+///                     Correspondence | Report | Other
+///   document status   draft | in-review | final | superseded
+///   document action   view | download | upload | delete | share
+///   meeting item kind decision | action | risk
+///   proposal status   draft | sent | viewed | negotiating | won | lost | expired
+///   invoice status    draft | due | paid | overdue | written-off
+///   content kind      article | case-study | service | industry | resource | job
+///   content status    draft | in-review | published | archived
+
+/// ------------------------------------------------- marketing & acquisition
+
+model Lead {
+  id        String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  reference String @unique
+  name      String
+  company   String
+  email     String @db.Citext
+  phone     String
+  city      String
+  industry  String
+
+  interest    String
+  revenueBand String  @map("revenue_band")
+  timeline    String
+  message     String?
+
+  utmSource    String  @default("direct") @map("utm_source")
+  utmMedium    String  @default("none") @map("utm_medium")
+  utmCampaign  String  @default("none") @map("utm_campaign")
+  landingPath  String  @default("/") @map("landing_path")
+  resourceSlug String? @map("resource_slug")
+
+  score        Int     @default(0)
+  assignedDesk String  @default("nurture-sequence") @map("assigned_desk")
+  stage        String  @default("marketing-qualified")
+  lostReason   String? @map("lost_reason")
+
+  crmContactId String?   @map("crm_contact_id")
+  crmSyncedAt  DateTime? @map("crm_synced_at") @db.Timestamptz
+  crmError     String?   @map("crm_error")
+
+  firstResponseAt DateTime? @map("first_response_at") @db.Timestamptz
+  ipAddress       String?   @map("ip_address") @db.Inet
+  userAgent       String?   @map("user_agent")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  clients    Client[]
+  proposals  Proposal[]
+  downloads  ResourceDownload[]
+  chatEvents ChatEvent[]
+
+  @@index([createdAt(sort: Desc)], map: "leads_created_idx")
+  @@index([assignedDesk, stage], map: "leads_desk_stage_idx")
+  @@index([email], map: "leads_email_idx")
+  @@map("leads")
+}
+
+model NewsletterSubscriber {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email          String    @unique @db.Citext
+  source         String    @default("site")
+  confirmed      Boolean   @default(false)
+  confirmedAt    DateTime? @map("confirmed_at") @db.Timestamptz
+  unsubscribedAt DateTime? @map("unsubscribed_at") @db.Timestamptz
+  resubscribedAt DateTime? @map("resubscribed_at") @db.Timestamptz
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  @@map("newsletter_subscribers")
+}
+
+model ResourceDownload {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  resourceSlug String   @map("resource_slug")
+  leadId       String?  @map("lead_id") @db.Uuid
+  lead         Lead?    @relation(fields: [leadId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  ipAddress    String?  @map("ip_address") @db.Inet
+  referrer     String?
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([resourceSlug, createdAt(sort: Desc)], map: "resource_downloads_slug_idx")
+  @@map("resource_downloads")
+}
+
+model ChatEvent {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sessionId String   @map("session_id")
+  node      String
+  choice    String?
+  leadId    String?  @map("lead_id") @db.Uuid
+  lead      Lead?    @relation(fields: [leadId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([sessionId, createdAt], map: "chat_events_session_idx")
+  @@index([node, createdAt(sort: Desc)], map: "chat_events_node_idx")
+  @@map("chat_events")
+}
+
+/// ------------------------------------------------------------ people
+
+model User {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email          String    @unique @db.Citext
+  name           String
+  role           String
+  passwordHash   String?   @map("password_hash")
+  phone          String?
+  avatarInitials String?   @map("avatar_initials")
+  isActive       Boolean   @default(true) @map("is_active")
+  lastLoginAt    DateTime? @map("last_login_at") @db.Timestamptz
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  partnerOfClients  Client[]            @relation("ClientPartner")
+  clientAccess      ClientUser[]
+  partnerOfProjects Project[]           @relation("ProjectPartner")
+  assignedTasks     Task[]
+  createdDocuments  Document[]
+  uploadedVersions  DocumentVersion[]
+  documentAccess    DocumentAccessLog[]
+  createdMeetings   Meeting[]
+  meetingAttendance MeetingAttendee[]
+  ownedProposals    Proposal[]
+  authoredContent   ContentEntry[]
+  auditEntries      AuditLog[]
+
+  @@map("users")
+}
+
+model Client {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  company      String
+  legalName    String?  @map("legal_name")
+  gstin        String?
+  industry     String
+  city         String
+  state        String?
+  website      String?
+  partnerId    String?  @map("partner_id") @db.Uuid
+  partner      User?    @relation("ClientPartner", fields: [partnerId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  sourceLeadId String?  @map("source_lead_id") @db.Uuid
+  sourceLead   Lead?    @relation(fields: [sourceLeadId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  onboardedOn  DateTime @default(dbgenerated("CURRENT_DATE")) @map("onboarded_on") @db.Date
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  users     ClientUser[]
+  projects  Project[]
+  invoices  Invoice[]
+  proposals Proposal[]
+
+  @@map("clients")
+}
+
+model ClientUser {
+  clientId   String    @map("client_id") @db.Uuid
+  client     Client    @relation(fields: [clientId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  userId     String    @map("user_id") @db.Uuid
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  access     String    @default("viewer")
+  invitedAt  DateTime  @default(now()) @map("invited_at") @db.Timestamptz
+  acceptedAt DateTime? @map("accepted_at") @db.Timestamptz
+
+  @@id([clientId, userId])
+  @@map("client_users")
+}
+
+/// ------------------------------------------------------- engagements
+
+model Project {
+  id          String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clientId    String  @map("client_id") @db.Uuid
+  client      Client  @relation(fields: [clientId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  name        String
+  serviceSlug String  @map("service_slug")
+  partnerId   String? @map("partner_id") @db.Uuid
+  partner     User?   @relation("ProjectPartner", fields: [partnerId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  engagementModel String  @map("engagement_model")
+  feeAmountPaise  BigInt? @map("fee_amount_paise")
+  feeSuccessBps   Int?    @map("fee_success_bps")
+
+  stage    String @default("scoping")
+  health   String @default("on-track")
+  progress Int    @default(0)
+
+  startedOn  DateTime  @default(dbgenerated("CURRENT_DATE")) @map("started_on") @db.Date
+  targetDate DateTime? @map("target_date") @db.Date
+  closedOn   DateTime? @map("closed_on") @db.Date
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  milestones Milestone[]
+  tasks      Task[]
+  documents  Document[]
+  meetings   Meeting[]
+  invoices   Invoice[]
+
+  @@index([clientId, startedOn(sort: Desc)], map: "projects_client_idx")
+  @@map("projects")
+}
+
+model Milestone {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId   String    @map("project_id") @db.Uuid
+  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  name        String
+  sequence    Int
+  dueOn       DateTime  @map("due_on") @db.Date
+  status      String    @default("upcoming")
+  completedOn DateTime? @map("completed_on") @db.Date
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@unique([projectId, sequence])
+  @@map("milestones")
+}
+
+model Task {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId     String    @map("project_id") @db.Uuid
+  project       Project   @relation(fields: [projectId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  title         String
+  detail        String?
+  ownerSide     String    @map("owner_side")
+  assigneeId    String?   @map("assignee_id") @db.Uuid
+  assignee      User?     @relation(fields: [assigneeId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  dueOn         DateTime? @map("due_on") @db.Date
+  status        String    @default("open")
+  blockedReason String?   @map("blocked_reason")
+  completedAt   DateTime? @map("completed_at") @db.Timestamptz
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  meetingItems MeetingItem[]
+
+  @@index([projectId, status], map: "tasks_project_idx")
+  @@map("tasks")
+}
+
+/// --------------------------------------------------------- documents
+
+model Document {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId      String   @map("project_id") @db.Uuid
+  project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  name           String
+  category       String
+  status         String   @default("draft")
+  clientVisible  Boolean  @default(true) @map("client_visible")
+  currentVersion Int      @default(1) @map("current_version")
+  createdById    String?  @map("created_by") @db.Uuid
+  createdBy      User?    @relation(fields: [createdById], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  versions  DocumentVersion[]
+  accessLog DocumentAccessLog[]
+
+  @@index([projectId, category], map: "documents_project_idx")
+  @@map("documents")
+}
+
+model DocumentVersion {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  documentId     String   @map("document_id") @db.Uuid
+  document       Document @relation(fields: [documentId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  version        Int
+  label          String   @default("v1.0")
+  storageKey     String   @map("storage_key")
+  mimeType       String   @map("mime_type")
+  sizeBytes      BigInt   @map("size_bytes")
+  checksumSha256 String?  @map("checksum_sha256")
+  uploadedById   String?  @map("uploaded_by") @db.Uuid
+  uploadedBy     User?    @relation(fields: [uploadedById], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  note           String?
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  accessLog DocumentAccessLog[]
+
+  @@unique([documentId, version])
+  @@map("document_versions")
+}
+
+model DocumentAccessLog {
+  id         String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  documentId String           @map("document_id") @db.Uuid
+  document   Document         @relation(fields: [documentId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  versionId  String?          @map("version_id") @db.Uuid
+  version    DocumentVersion? @relation(fields: [versionId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  userId     String?          @map("user_id") @db.Uuid
+  user       User?            @relation(fields: [userId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  action     String
+  ipAddress  String?          @map("ip_address") @db.Inet
+  createdAt  DateTime         @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([documentId, createdAt(sort: Desc)], map: "document_access_log_doc_idx")
+  @@map("document_access_log")
+}
+
+/// ---------------------------------------------------------- meetings
+
+model Meeting {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId     String   @map("project_id") @db.Uuid
+  project       Project  @relation(fields: [projectId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  title         String
+  heldOn        DateTime @map("held_on") @db.Date
+  location      String?
+  minutes       String?
+  clientVisible Boolean  @default(true) @map("client_visible")
+  createdById   String?  @map("created_by") @db.Uuid
+  createdBy     User?    @relation(fields: [createdById], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  attendees MeetingAttendee[]
+  items     MeetingItem[]
+
+  @@map("meetings")
+}
+
+model MeetingAttendee {
+  meetingId String  @map("meeting_id") @db.Uuid
+  meeting   Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  name      String
+  userId    String? @map("user_id") @db.Uuid
+  user      User?   @relation(fields: [userId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@id([meetingId, name])
+  @@map("meeting_attendees")
+}
+
+model MeetingItem {
+  id        String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  meetingId String  @map("meeting_id") @db.Uuid
+  meeting   Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  kind      String
+  body      String
+  taskId    String? @map("task_id") @db.Uuid
+  task      Task?   @relation(fields: [taskId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  sequence  Int     @default(0)
+
+  @@index([meetingId, kind, sequence], map: "meeting_items_meeting_idx")
+  @@map("meeting_items")
+}
+
+/// ------------------------------------------------ proposals & billing
+
+model Proposal {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  reference       String    @unique
+  leadId          String?   @map("lead_id") @db.Uuid
+  lead            Lead?     @relation(fields: [leadId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  clientId        String?   @map("client_id") @db.Uuid
+  client          Client?   @relation(fields: [clientId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  serviceSlug     String    @map("service_slug")
+  title           String
+  body            Json      @default("{}")
+  valuePaise      BigInt    @map("value_paise")
+  engagementModel String    @map("engagement_model")
+  ownerId         String?   @map("owner_id") @db.Uuid
+  owner           User?     @relation(fields: [ownerId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  status          String    @default("draft")
+  shareToken      String?   @unique @map("share_token")
+  validUntil      DateTime? @map("valid_until") @db.Date
+  sentAt          DateTime? @map("sent_at") @db.Timestamptz
+  firstViewedAt   DateTime? @map("first_viewed_at") @db.Timestamptz
+  decidedAt       DateTime? @map("decided_at") @db.Timestamptz
+  lostReason      String?   @map("lost_reason")
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  views ProposalView[]
+
+  @@index([status, sentAt(sort: Desc)], map: "proposals_status_idx")
+  @@map("proposals")
+}
+
+model ProposalView {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  proposalId    String   @map("proposal_id") @db.Uuid
+  proposal      Proposal @relation(fields: [proposalId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  ipAddress     String?  @map("ip_address") @db.Inet
+  userAgent     String?  @map("user_agent")
+  secondsOnPage Int?     @map("seconds_on_page")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@map("proposal_views")
+}
+
+model Invoice {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  reference        String    @unique
+  clientId         String    @map("client_id") @db.Uuid
+  client           Client    @relation(fields: [clientId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  projectId        String?   @map("project_id") @db.Uuid
+  project          Project?  @relation(fields: [projectId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  description      String
+  amountPaise      BigInt    @map("amount_paise")
+  gstPaise         BigInt    @default(0) @map("gst_paise")
+  issuedOn         DateTime  @default(dbgenerated("CURRENT_DATE")) @map("issued_on") @db.Date
+  dueOn            DateTime  @map("due_on") @db.Date
+  paidOn           DateTime? @map("paid_on") @db.Date
+  status           String    @default("due")
+  paymentReference String?   @map("payment_reference")
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@index([clientId, issuedOn(sort: Desc)], map: "invoices_client_idx")
+  @@map("invoices")
+}
+
+/// --------------------------------------------------------- editorial
+
+model ContentEntry {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  kind        String
+  slug        String
+  title       String
+  status      String    @default("draft")
+  cluster     String?
+  authorId    String?   @map("author_id") @db.Uuid
+  author      User?     @relation(fields: [authorId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  body        Json      @default("{}")
+  seo         Json      @default("{}")
+  publishedAt DateTime? @map("published_at") @db.Timestamptz
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@unique([kind, slug])
+  @@map("content_entries")
+}
+
+model ContentMetricDaily {
+  path        String
+  day         DateTime @db.Date
+  views       Int      @default(0)
+  enquiries   Int      @default(0)
+  avgPosition Decimal? @map("avg_position") @db.Decimal(4, 1)
+
+  @@id([path, day])
+  @@map("content_metrics_daily")
+}
+
+/// ------------------------------------------------------------- audit
+
+model AuditLog {
+  id        BigInt   @id @default(autoincrement())
+  actorId   String?  @map("actor_id") @db.Uuid
+  actor     User?    @relation(fields: [actorId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  action    String
+  entity    String
+  entityId  String?  @map("entity_id") @db.Uuid
+  before    Json?
+  after     Json?
+  ipAddress String?  @map("ip_address") @db.Inet
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([entity, entityId, createdAt(sort: Desc)], map: "audit_log_entity_idx")
+  @@index([actorId, createdAt(sort: Desc)], map: "audit_log_actor_idx")
+  @@map("audit_log")
+}
