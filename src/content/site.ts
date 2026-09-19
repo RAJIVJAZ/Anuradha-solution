@@ -1,12 +1,38 @@
 /** Global site configuration: identity, navigation, contact, proof points. */
 
+const DEFAULT_SITE_URL = "https://www.anuradhasolutions.in";
+
+/**
+ * Resolves the canonical site origin from the environment.
+ *
+ * Deliberately more defensive than `?? DEFAULT_SITE_URL`: that operator only
+ * falls back on `null`/`undefined`, not on an empty string — and an env var
+ * that exists but is set to "" (easy to do by accident in a hosting
+ * dashboard) is indistinguishable from a real value until `new URL()` throws
+ * deep inside `layout.tsx` and takes the whole build down with it. This
+ * validates the resolved value is an actual parseable URL and falls back to
+ * the default for anything that isn't — empty, whitespace, or malformed.
+ */
+function resolveSiteUrl(): string {
+  const raw = process.env.NEXT_PUBLIC_SITE_URL?.trim();
+  if (!raw) return DEFAULT_SITE_URL;
+  try {
+    return new URL(raw).toString().replace(/\/$/, "");
+  } catch {
+    console.warn(
+      `[site] NEXT_PUBLIC_SITE_URL is set to an invalid URL ("${raw}"); falling back to ${DEFAULT_SITE_URL}.`,
+    );
+    return DEFAULT_SITE_URL;
+  }
+}
+
 export const site = {
   name: "Anuradha Solutions",
   legalName: "Anuradha Solutions Advisory Private Limited",
   tagline: "Growth. Factory Setup. Funding. Branding.",
   shortDescription:
     "A niche business advisory firm that helps Indian MSMEs in manufacturing, dairy and food processing scale from ₹1 crore to ₹100 crore.",
-  url: process.env.NEXT_PUBLIC_SITE_URL ?? "https://www.anuradhasolutions.in",
+  url: resolveSiteUrl(),
   founded: "2016",
   email: "engage@anuradhasolutions.in",
   careersEmail: "careers@anuradhasolutions.in",

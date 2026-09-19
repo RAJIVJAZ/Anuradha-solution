@@ -17,13 +17,26 @@ const globalForDb = globalThis as unknown as { asPool?: Pool };
 
 export const dbEnabled = Boolean(process.env.DATABASE_URL);
 
+/**
+ * Parses a positive-integer env var, falling back on anything that isn't one
+ * — unset, empty string, "0", or garbage. `Number(process.env.X ?? 5)` looks
+ * safe but isn't: `??` only catches null/undefined, so `DATABASE_POOL_MAX=""`
+ * (easy to set by accident in a hosting dashboard) silently becomes
+ * `Number("") === 0`, which creates a connection pool that can never open a
+ * connection — no error, just a service that mysteriously never works.
+ */
+function positiveIntEnv(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return value && Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 export function getPool(): Pool | null {
   if (!dbEnabled) return null;
 
   if (!globalForDb.asPool) {
     globalForDb.asPool = new Pool({
       connectionString: process.env.DATABASE_URL,
-      max: Number(process.env.DATABASE_POOL_MAX ?? 5),
+      max: positiveIntEnv(process.env.DATABASE_POOL_MAX, 5),
       idleTimeoutMillis: 30_000,
       connectionTimeoutMillis: 8_000,
       ssl:
