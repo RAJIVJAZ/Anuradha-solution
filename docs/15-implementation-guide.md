@@ -10,6 +10,7 @@
 | Styling | Tailwind CSS | 4.x | `@theme` tokens are the design system's source of truth |
 | Validation | Zod | 4.x | One schema shared by client and server |
 | Database | PostgreSQL | 16 | `pg` directly; Prisma mirror available |
+| Auth | `@supabase/server` | 1.x | User verification for API routes — see docs/17. Optional; needs Node ≥ 22 |
 | Fonts | `next/font` | — | Self-hosted Source Serif 4, Inter, JetBrains Mono |
 | Charts | Hand-authored SVG | — | No charting library; eight fixed charts, not arbitrary data |
 | Hosting | Vercel | — | ap-south-1 for the functions |
@@ -114,6 +115,11 @@ declaratively.
 | `SLACK_LEADS_WEBHOOK_URL` | Set | Leave unset |
 | `RESOURCE_ASSET_BASE_URL` | CDN base | Optional |
 | `NEXT_PUBLIC_GA4_MEASUREMENT_ID` | Set | Leave unset |
+| `SUPABASE_URL` / `SUPABASE_PUBLISHABLE_KEY` / `SUPABASE_JWKS_URL` | Set — see docs/17 | Separate project, never production's |
+| `SUPABASE_SECRET_KEY` | Set only if something uses `ctx.supabaseAdmin` | Leave unset |
+
+Also set the project's **Node.js Version to 22.x** (Project Settings → General)
+— `@supabase/server` requires Node ≥ 22, stricter than Next.js's own ≥20.9.0.
 
 `robots.ts` disallows all crawling unless `VERCEL_ENV === "production"`, so
 previews cannot compete with production in search. Leaving CRM and analytics keys

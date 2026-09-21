@@ -94,7 +94,7 @@ in the panel header. Overdue is shown plainly rather than softened.
 
 | Area | Requirement |
 | --- | --- |
-| Authentication | Magic-link email sign-in; no client passwords to reset or leak |
+| Authentication | Supabase Auth magic-link sign-in — see docs/17-supabase-auth.md. No client passwords to reset or leak; `src/lib/supabase.ts` verifies the resulting JWT server-side |
 | Authorisation | Access via `client_users`; a user may hold several client entities and switches between them |
 | Multi-entity | Entity switcher in the sidebar when `client_users` returns more than one row |
 | Uploads | Pre-signed S3-compatible URLs; virus scan before the file becomes visible; `document_versions` row written on completion |

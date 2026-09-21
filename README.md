@@ -41,6 +41,12 @@ layouts can be signed off before authentication is wired in.
 partial indexes, append-only document versioning and an audit log. `db/seed.sql`
 for development. `prisma/schema.prisma` mirrors it for teams preferring Prisma.
 
+**Auth** — `src/lib/supabase.ts` verifies a caller's JWT against a Supabase
+project for any Route Handler that needs to know who's calling, via
+`@supabase/server`. Optional and unused by the existing public routes (all
+deliberately unauthenticated); see docs/17-supabase-auth.md for what's wired
+up and what isn't.
+
 **SEO** — per-page metadata through one helper, a single JSON-LD `@graph` per
 page, generated sitemap and robots (previews are disallowed from indexing), and
 an OG image route built from the design tokens.
@@ -65,6 +71,7 @@ an OG image route built from the design tokens.
 | Newsletter / chat / resource APIs | Persist and behave as specified |
 | Structured data | Valid JSON, correct types per template |
 | `noindex` on `/portal`, `/admin` | Present, and disallowed in `robots.txt` |
+| Supabase auth helper | `resolveEnv()` and `requireUser()` exercised against the live project's real URL and publishable key (MCP-verified); correct 401s on missing/invalid tokens |
 
 ## Documentation
 
@@ -90,6 +97,7 @@ development team to continue without further planning.
 | 14 | Content architecture | Content types, editorial standards, cadence, CMS migration |
 | 15 | Implementation guide | Stack reasoning, setup, deployment, pre-launch checklist |
 | 16 | Copy deck | Voice rules, every page template's copy, microcopy |
+| 17 | Supabase Auth integration | What's wired up, a real quirk found by testing, and the explicit scope boundary |
 
 ## Placeholders to replace before launch
 

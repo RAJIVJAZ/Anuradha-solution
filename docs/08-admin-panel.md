@@ -85,7 +85,7 @@ a task has been waiting on the client for more than 14 days.
 
 | Area | Requirement |
 | --- | --- |
-| Authentication | SSO (Google Workspace) with email-domain allowlist; sessions in httpOnly cookies |
+| Authentication | Supabase Auth — see docs/17-supabase-auth.md. Google Workspace OAuth with an email-domain allowlist is the natural provider choice for staff; `src/lib/supabase.ts` verifies the resulting JWT server-side |
 | Authorisation | `users.role` drives access. `owner`/`partner` see everything; `consultant`/`analyst` see their own engagements and the full lead queue; `client` role is rejected here outright |
 | Audit | Every mutation writes to `audit_log` with actor, before and after |
 | PII | Lead email and phone masked for `analyst` role until a lead is assigned to them |
